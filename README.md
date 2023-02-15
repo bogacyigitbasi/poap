@@ -4,15 +4,15 @@ cargo concordium build --out dist/module.wasm.v1 --schema-out dist/schema.bin
 
 # Deploy the contract
 
-concordium-client module deploy dist/module.wasm.v1 --sender 3AiAikC2v4H3Rv4L58oHvdX5N8LJoarsQwN3G7oNS7BoFsmt7N --name poap3 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
+concordium-client module deploy dist/module.wasm.v1 --sender <YOUR-ADDRESS> --name poap3 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
 
 # Initialize the contract
 
-concordium-client contract init <MODULE-HASH> --sender 3AiAikC2v4H3Rv4L58oHvdX5N8LJoarsQwN3G7oNS7BoFsmt7N --energy 30000 --contract poap --grpc-port 10000 --grpc-ip node.testnet.concordium.com
+concordium-client contract init <MODULE-HASH> --sender <YOUR-ADDRESS> --energy 30000 --contract poap --grpc-port 10000 --grpc-ip node.testnet.concordium.com
 
 # Mint Fungible Tokens
 
-concordium-client contract update <YOUR-INDEX> --entrypoint mint --parameter-json nft-artifacts/mint-params.json --schema dist/schema.bin --sender 3AiAikC2v4H3Rv4L58oHvdX5N8LJoarsQwN3G7oNS7BoFsmt7N --energy 6000 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
+concordium-client contract update <YOUR-INDEX> --entrypoint mint --parameter-json nft-artifacts/mint-params.json --schema dist/schema.bin --sender <YOUR-ADDRESS> --energy 6000 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
 
 # View Contract State
 
@@ -28,7 +28,7 @@ concordium-client contract invoke <YOUR-INDEX> --entrypoint tokenMetadata --para
 
 # Transfer
 
-concordium-client contract update <YOUR-INDEX> --entrypoint transfer --parameter-json nft-artifacts/transfer.json --schema dist/schema.bin --sender 3AiAikC2v4H3Rv4L58oHvdX5N8LJoarsQwN3G7oNS7BoFsmt7N --energy 6000 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
+concordium-client contract update <YOUR-INDEX> --entrypoint transfer --parameter-json nft-artifacts/transfer.json --schema dist/schema.bin --sender <YOUR-ADDRESS> --energy 6000 --grpc-port 10000 --grpc-ip node.testnet.concordium.com
 
 # Burn
 
