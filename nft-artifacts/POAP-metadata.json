@@ -1,0 +1,15 @@
+{
+  "name": "Concordium Gitcoin Hackathon: Future of Identity",
+  "unique": true,
+  "description": "POAP NFT for the participants of the hackathon!",
+  "display": {
+    "url": "https://gateway.pinata.cloud/ipfs/QmXQyWtigjNzFxMr53vURvTkbEfWRjuXv7oQGD3kg3PK9R"
+  },
+  "attributes": [
+    {
+      "type": "string",
+      "name": "Hacking",
+      "value": "999"
+    }
+  ]
+}
