@@ -26,12 +26,13 @@
 //! implementation of a token receive hook.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+
 use concordium_cis2::*;
 use concordium_std::*;
 
 /// The baseurl for the token metadata, gets appended with the token ID as hex
 /// encoding before emitted in the TokenMetadata event.
-const TOKEN_METADATA_BASE_URL: &str = "https://some.example/token/";
+// const TOKEN_METADATA_BASE_URL: &str = "https://some.example/token/";
 
 /// List of supported standards by this contract address.
 const SUPPORTS_STANDARDS: [StandardIdentifier<'static>; 2] =
@@ -124,6 +125,18 @@ enum EventStatus {
     Pause,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq, Reject, SchemaType, Clone)]
+pub enum Roles {
+    Organizer,
+    User,
+}
+
+#[derive(Serial, DeserialWithState, Deletable)]
+#[concordium(state_parameter = "S")]
+struct AddressRoleState<S> {
+    roles: StateSet<Roles, S>,
+}
+
 /// The contract state,
 ///
 /// Note: The specification does not specify how to structure the contract state
@@ -138,6 +151,8 @@ struct State<S> {
     /// Map with contract addresses providing implementations of additional
     /// standards.
     implementors: StateMap<StandardIdentifierOwned, Vec<ContractAddress>, S>,
+
+    roles: StateMap<Address, AddressRoleState<S>, S>,
 
     event_state: EventStatus,
 }
@@ -167,6 +182,8 @@ enum CustomContractError {
     EventPassive,
     /// only one token can be transferred
     MoreThanOneTokenTransfer,
+    /// unique token
+    TokenAlreadyMinted,
 }
 
 type ContractError = Cis2Error<CustomContractError>;
@@ -216,6 +233,7 @@ impl<S: HasStateApi> State<S> {
             state: state_builder.new_map(),
             tokens: state_builder.new_map(),
             implementors: state_builder.new_map(),
+            roles: state_builder.new_map(),
             event_state: EventStatus::Active,
         }
     }
@@ -395,15 +413,40 @@ impl<S: HasStateApi> State<S> {
     ) {
         self.implementors.insert(std_id, implementors);
     }
+
+    fn has_role(&self, account: &Address, role: Roles) -> bool {
+        return match self.roles.get(account) {
+            None => false,
+            Some(roles) => roles.roles.contains(&role),
+        };
+    }
+
+    fn grant_role(&mut self, account: &Address, role: Roles, state_builder: &mut StateBuilder<S>) {
+        self.roles
+            .entry(*account)
+            .or_insert_with(|| AddressRoleState {
+                roles: state_builder.new_set(),
+            });
+
+        self.roles.entry(*account).and_modify(|entry| {
+            entry.roles.insert(role);
+        });
+    }
+
+    fn remove_role(&mut self, account: &Address, role: Roles) {
+        self.roles.entry(*account).and_modify(|entry| {
+            entry.roles.remove(&role);
+        });
+    }
 }
 
 // /// Build a string from TOKEN_METADATA_BASE_URL appended with the token ID
 // /// encoded as hex.
-fn build_token_metadata_url(token_id: &ContractTokenId) -> String {
-    let mut token_metadata_url = String::from(TOKEN_METADATA_BASE_URL);
-    token_metadata_url.push_str(&token_id.to_string());
-    token_metadata_url
-}
+// fn build_token_metadata_url(token_id: &ContractTokenId) -> String {
+//     let mut token_metadata_url = String::from(TOKEN_METADATA_BASE_URL);
+//     token_metadata_url.push_str(&token_id.to_string());
+//     token_metadata_url
+// }
 
 // Contract functions
 
@@ -427,6 +470,7 @@ struct ViewAddressState {
 struct ViewState {
     state: Vec<(Address, ViewAddressState)>,
     tokens: Vec<ContractTokenId>,
+    // roles: Vec<HashMap<Address, Roles>>,
     status: EventStatus,
 }
 
@@ -439,7 +483,6 @@ fn contract_view<S: HasStateApi>(
     host: &impl HasHost<State<S>, StateApiType = S>,
 ) -> ReceiveResult<ViewState> {
     let state = host.state();
-    // let status = state.event_state;
 
     let mut inner_state = Vec::new();
     for (k, a_state) in state.state.iter() {
@@ -464,10 +507,15 @@ fn contract_view<S: HasStateApi>(
     for v in state.tokens.iter() {
         tokens.push(v.0.to_owned());
     }
+    // let mut roles = Vec::new();
+    // for r in state.roles.iter() {
+    //     roles.push((*r.0, *r.1));
+    // }
 
     Ok(ViewState {
         state: inner_state,
         tokens,
+        // roles,
         status: state.event_state,
     })
 }
@@ -487,7 +535,7 @@ fn contract_view<S: HasStateApi>(
 fn contract_pause<S: HasStateApi>(
     ctx: &impl HasReceiveContext,
     host: &mut impl HasHost<State<S>, StateApiType = S>,
-    logger: &mut impl HasLogger,
+    _logger: &mut impl HasLogger,
 ) -> ContractResult<()> {
     // Get the contract owner
     let owner = ctx.owner();
@@ -512,7 +560,7 @@ fn contract_pause<S: HasStateApi>(
 fn contract_resume<S: HasStateApi>(
     ctx: &impl HasReceiveContext,
     host: &mut impl HasHost<State<S>, StateApiType = S>,
-    logger: &mut impl HasLogger,
+    _logger: &mut impl HasLogger,
 ) -> ContractResult<()> {
     // Get the contract owner
     let owner = ctx.owner();
@@ -523,6 +571,74 @@ fn contract_resume<S: HasStateApi>(
 
     let state = host.state_mut();
     state.resume_event();
+    Ok(())
+}
+
+/// Authorize/Unauthorize
+#[derive(Serial, Deserial, SchemaType)]
+struct Auth {
+    addresses: Vec<Address>,
+}
+
+////
+//// assign role as admin
+////
+#[receive(
+    contract = "poap",
+    name = "authorize",
+    parameter = "Auth",
+    error = "ContractError",
+    enable_logger,
+    mutable
+)]
+fn contract_authorize<S: HasStateApi>(
+    ctx: &impl HasReceiveContext,
+    host: &mut impl HasHost<State<S>, StateApiType = S>,
+    _logger: &mut impl HasLogger,
+) -> ContractResult<()> {
+    // Get the contract owner
+    let owner = ctx.owner();
+    // Get the sender of the transaction
+    let sender = ctx.sender();
+
+    ensure!(sender.matches_account(&owner), ContractError::Unauthorized);
+
+    let accounts: Auth = ctx.parameter_cursor().get()?;
+    let (state, builder) = host.state_and_builder();
+    // Build the respons
+    for acc in accounts.addresses {
+        state.grant_role(&acc, Roles::Organizer, builder);
+    }
+    Ok(())
+}
+////
+//// remove admin roles
+////
+#[receive(
+    contract = "poap",
+    name = "unauthorize",
+    parameter = "Auth",
+    error = "ContractError",
+    enable_logger,
+    mutable
+)]
+fn contract_unauthorize<S: HasStateApi>(
+    ctx: &impl HasReceiveContext,
+    host: &mut impl HasHost<State<S>, StateApiType = S>,
+    _logger: &mut impl HasLogger,
+) -> ContractResult<()> {
+    let owner = ctx.owner();
+    // Get the sender of the transaction
+    let sender = ctx.sender();
+
+    ensure!(sender.matches_account(&owner), ContractError::Unauthorized);
+
+    let accounts: Auth = ctx.parameter_cursor().get()?;
+    let state = host.state_mut();
+    // Build the respons
+    for acc in accounts.addresses {
+        state.remove_role(&acc, Roles::Organizer);
+    }
     Ok(())
 }
 
@@ -559,12 +675,15 @@ fn contract_mint<S: HasStateApi>(
     // Get the sender of the transaction
     let sender = ctx.sender();
 
-    ensure!(sender.matches_account(&owner), ContractError::Unauthorized);
-
     // Parse the parameter.
     let params: MintParams = ctx.parameter_cursor().get()?;
 
     let (state, builder) = host.state_and_builder();
+
+    ensure!(
+        sender.matches_account(&owner) || state.has_role(&sender, Roles::Organizer),
+        ContractError::Unauthorized
+    );
 
     ensure!(
         state.event_state == EventStatus::Active,
@@ -572,6 +691,10 @@ fn contract_mint<S: HasStateApi>(
     );
 
     for (token_id, token_info) in params.tokens {
+        ensure!(
+            !state.contains_token(&token_id),
+            ContractError::Custom(CustomContractError::TokenAlreadyMinted)
+        );
         // Mint the token in the state.
         state.mint(
             &token_id,
@@ -623,19 +746,25 @@ struct BurnParams {
 fn contract_revoke<S: HasStateApi>(
     ctx: &impl HasReceiveContext,
     host: &mut impl HasHost<State<S>, StateApiType = S>,
-    logger: &mut impl HasLogger,
+    _logger: &mut impl HasLogger,
 ) -> ContractResult<()> {
     // Get the contract owner
     let owner = ctx.owner();
     // Get the sender of the transaction
     let sender = ctx.sender();
 
-    ensure!(sender.matches_account(&owner), ContractError::Unauthorized);
+    // ensure!(sender.matches_account(&owner), ContractError::Unauthorized);
 
     // Parse the parameter.
     let params: BurnParams = ctx.parameter_cursor().get()?;
 
     let state = host.state_mut();
+
+    ensure!(
+        sender.matches_account(&owner) || state.has_role(&sender, Roles::Organizer),
+        ContractError::Unauthorized
+    );
+
     for burn_param in params.tokens {
         let account = burn_param.account;
         let token_id = burn_param.token_id;
@@ -644,7 +773,7 @@ fn contract_revoke<S: HasStateApi>(
         let remaining_amount: ContractTokenAmount = state.burn(&token_id, amount, &account)?;
 
         // log burn event
-        logger.log(&Cis2Event::Burn(BurnEvent {
+        _logger.log(&Cis2Event::Burn(BurnEvent {
             token_id,
             amount,
             owner: account,
